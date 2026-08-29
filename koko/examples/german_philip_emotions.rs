@@ -22,8 +22,6 @@ fn main() -> Result<()> {
         )
         .init();
 
-    let test_text = "Hallo, ich bin Robi und presentiere euch die TTS Engine Kokoro.";
-
     let base_dir = PathBuf::from("_dev_data/male_philip_emotion_variation");
 
     let model_path = base_dir.join("kokoro-martin.onnx");
@@ -45,47 +43,85 @@ fn main() -> Result<()> {
     sink.log_on_drop(false);
     let player = Player::connect_new(&sink.mixer());
 
-    /*** Following does currently not work of course - but that is the goal  ***/
+    // neutral
+    {
+        let text = "Neutral - Die Auswertung der Daten ist abgeschlossen. Es wurden keine weiteren Anomalien im System festgestellt.";
 
-    let samples_neutral = model
-        .tts_raw_audio(test_text, "de", "neutral", 1.0, None, None, None, None)
-        .map_err(|e| anyhow::Error::msg(e.to_string()))?;
-    player.append(AudioSource::new(samples_neutral));
+        let samples = model
+            .tts_raw_audio(text, "de", "neutral", 1.0, None, None, None, None)
+            .map_err(|e| anyhow::Error::msg(e.to_string()))?;
+        player.append(AudioSource::new(samples));
+    }
 
-    let samples_happy = model
-        .tts_raw_audio(test_text, "de", "happy", 1.0, None, None, None, None)
-        .map_err(|e| anyhow::Error::msg(e.to_string()))?;
-    player.append(AudioSource::new(samples_happy));
+    // happy
+    {
+        let text = "Glücklich - Oh mein Gott, das ist ja absolut fantastisch! Ich kann es kaum erwarten, das zu feiern!";
 
-    let samples_sad = model
-        .tts_raw_audio(test_text, "de", "sad", 1.0, None, None, None, None)
-        .map_err(|e| anyhow::Error::msg(e.to_string()))?;
-    player.append(AudioSource::new(samples_sad));
+        let samples = model
+            .tts_raw_audio(text, "de", "happy", 1.0, None, None, None, None)
+            .map_err(|e| anyhow::Error::msg(e.to_string()))?;
+        player.append(AudioSource::new(samples));
+    }
 
-    let samples_angry = model
-        .tts_raw_audio(test_text, "de", "angry", 1.0, None, None, None, None)
-        .map_err(|e| anyhow::Error::msg(e.to_string()))?;
-    player.append(AudioSource::new(samples_angry));
+    // sad
+    {
+        let text = "Traurig - Ich... ich weiß einfach nicht mehr weiter. Es tut mir so leid, dass es so enden musste.";
 
-    let samples_fearful = model
-        .tts_raw_audio(test_text, "de", "fearful", 1.0, None, None, None, None)
-        .map_err(|e| anyhow::Error::msg(e.to_string()))?;
-    player.append(AudioSource::new(samples_fearful));
+        let samples = model
+            .tts_raw_audio(text, "de", "sad", 1.0, None, None, None, None)
+            .map_err(|e| anyhow::Error::msg(e.to_string()))?;
+        player.append(AudioSource::new(samples));
+    }
 
-    let samples_surprised = model
-        .tts_raw_audio(test_text, "de", "surprised", 1.0, None, None, None, None)
-        .map_err(|e| anyhow::Error::msg(e.to_string()))?;
-    player.append(AudioSource::new(samples_surprised));
+    // angry
+    {
+        let text = "Wütend - Jetzt reicht es mir aber langsam! Wie oft muss ich das eigentlich noch wiederholen?!";
 
-    let samples_disgusted = model
-        .tts_raw_audio(test_text, "de", "disgusted", 1.0, None, None, None, None)
-        .map_err(|e| anyhow::Error::msg(e.to_string()))?;
-    player.append(AudioSource::new(samples_disgusted));
+        let samples = model
+            .tts_raw_audio(text, "de", "angry", 1.0, None, None, None, None)
+            .map_err(|e| anyhow::Error::msg(e.to_string()))?;
+        player.append(AudioSource::new(samples));
+    }
 
-    let samples_bored = model
-        .tts_raw_audio(test_text, "de", "bored", 1.0, None, None, None, None)
-        .map_err(|e| anyhow::Error::msg(e.to_string()))?;
-    player.append(AudioSource::new(samples_bored));
+    // fearful
+    {
+        let text = "Ängstlich - Hast du das auch gehört? Bitte... mach das Licht nicht aus, hier stimmt irgendetwas ganz und gar nicht.";
+
+        let samples = model
+            .tts_raw_audio(text, "de", "fearful", 1.0, None, None, None, None)
+            .map_err(|e| anyhow::Error::msg(e.to_string()))?;
+        player.append(AudioSource::new(samples));
+    }
+
+    // surprised
+    {
+        let text = "Überrascht - Was?! Das ist doch völlig unmöglich! Damit hätte ich im Leben nicht gerechnet!";
+
+        let samples = model
+            .tts_raw_audio(text, "de", "surprised", 1.0, None, None, None, None)
+            .map_err(|e| anyhow::Error::msg(e.to_string()))?;
+        player.append(AudioSource::new(samples));
+    }
+
+    // disgusted
+    {
+        let text = "Angewiedert - Ugh, das ist ja absolut widerwärtig. Bring das bitte sofort weg von mir.";
+
+        let samples = model
+            .tts_raw_audio(text, "de", "disgusted", 1.0, None, None, None, None)
+            .map_err(|e| anyhow::Error::msg(e.to_string()))?;
+        player.append(AudioSource::new(samples));
+    }
+
+    // bored
+    {
+        let text = "Gelangweilt - Gähn. Ja, toll. Genau das, worauf ich den ganzen Tag gewartet habe. Was für eine Begeisterung.";
+
+        let samples = model
+            .tts_raw_audio(text, "de", "bored", 1.0, None, None, None, None)
+            .map_err(|e| anyhow::Error::msg(e.to_string()))?;
+        player.append(AudioSource::new(samples));
+    }
 
     // keeps the thread alive till audio ends.
     player.sleep_until_end();

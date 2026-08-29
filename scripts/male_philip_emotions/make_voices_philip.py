@@ -8,19 +8,31 @@ prosodic dims, identical across the 510 rows for a single-speaker pack).
 
 This script reproduces the official kikiri-tts `extract_voicepack.py` logic:
 for each source emotion WAV it computes a mel spectrogram, runs the
-StyleTTS2 `style_encoder` and `predictor_encoder` from the Stage-1 raw
-checkpoint, averages the resulting vectors, and writes one `(510, 1, 256)`
-voicepack per emotion into `voices-philip.npz`.
+StyleTTS2 `style_encoder` (timbre/acoustic) and `predictor_encoder`
+(prosody) encoders, averages the resulting vectors, and writes one
+`(510, 1, 256)` voicepack per emotion into `voices-philip.npz`.
 
-Because only a Stage-1 checkpoint is supplied, the `predictor_encoder` is
-untrained (documented StyleTTS2 behaviour) so the `style_encoder` is used for
-both halves, exactly as the upstream script does.
+The two encoders generally come from different checkpoints:
+- `style_encoder` (first 128 dims, timbre): from a Stage-1 base checkpoint.
+- `predictor_encoder` (last 128 dims, emotional prosody): from the Stage-2
+  fine-tune checkpoint of the target voice. The Stage-1 `predictor_encoder`
+  is untrained/collapsed, which mutes emotion; using the Stage-2
+  `predictor_encoder` preserves the source WAVs' prosody so emotion
+  variations stay audible.
+
+Recommended (for kokoro-martin.onnx, the Martin Stage-2 export):
+    .venv/bin/python ../../scripts/male_philip_emotions/make_voices_philip.py \
+        --style-encoder-model stage1_ep4_raw.pth \
+        --predictor-encoder-model stage2_martin_ep10_raw.pth \
+        --wav-dir philip_source_emotion_wavs \
+        --output voices-philip.npz
 
 Usage
 -----
     cd _dev_data/male_philip_emotion_variation
     uv venv --python 3.11 .venv
     uv pip install --python .venv/bin/python 'numpy<2' torch torchaudio soundfile
+    # Backward-compatible single-checkpoint form (Stage-1 only; muted emotion):
     .venv/bin/python ../../scripts/male_philip_emotions/make_voices_philip.py \
         --checkpoint stage1_ep4_raw.pth \
         --wav-dir philip_source_emotion_wavs \
@@ -33,11 +45,14 @@ torchaudio, soundfile, numpy<2 (torch 2.2.2 needs numpy 1.x).
 
 Inputs
 ------
-- `stage1_ep4_raw.pth`: StyleTTS2 Stage-1 raw checkpoint containing
-  `net.style_encoder`/`net.predictor_encoder` (from
-  kikiri-tts/kikiri-german-base-51speakers-synthetic). NOT the converted
-  `kikiri_german_base_51spk_ep4.pth`, which holds only Kokoro-inference
-  weights without the encoders.
+- Raw StyleTTS2 checkpoints (each contains `net.style_encoder` /
+  `net.predictor_encoder`; the converted `*_ep*.pth` Kokoro-inference
+  files do not and are NOT usable):
+  - `stage1_ep4_raw.pth`: Stage-1 base, source of `style_encoder` (from
+    kikiri-tts/kikiri-german-base-51speakers-synthetic).
+  - `stage2_martin_ep10_raw.pth`: Stage-2 fine-tune of the target voice,
+    source of the trained `predictor_encoder` (from
+    kikiri-tts/kikiri-german-martin).
 - `philip_source_emotion_wavs/*.wav`: one source WAV per emotion, named
   by the emotion (neutral.wav, happy.wav, ...). Their names become the npz
   keys. Resampled to 24 kHz internally.
@@ -180,44 +195,53 @@ mel_mean = -4
 mel_std = 4
 
 
+def device_from_arg(device):
+    if device == "auto":
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    return device
+
+
+def load_encoder(kind, checkpoint_path, device):
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    net = checkpoint["net"]
+    encoder = StyleEncoder(dim_in=64, style_dim=128, max_conv_dim=512)
+    encoder.load_state_dict(strip_prefix(net[kind]))
+    return encoder.to(device).eval(), net, checkpoint
+
+
+def encoder_is_trained(encoder):
+    with torch.no_grad():
+        norm = encoder(torch.randn(1, 1, 80, 200)).norm().item()
+    return 0.5 <= norm <= 1e3
+
+
 def main():
     parser = argparse.ArgumentParser(description="Generate voices-philip.npz from emotion source WAVs")
-    parser.add_argument("--checkpoint", required=True, help="Stage-1 raw StyleTTS2 checkpoint (.pth)")
+    parser.add_argument("--checkpoint", help="Raw StyleTTS2 checkpoint for both encoders (fallback)")
+    parser.add_argument("--style-encoder-model", help="Checkpoint providing net.style_encoder (timbre)")
+    parser.add_argument("--predictor-encoder-model", help="Checkpoint providing net.predictor_encoder (prosody)")
     parser.add_argument("--wav-dir", required=True, help="Directory containing emotion source WAVs")
     parser.add_argument("--output", required=True, help="Output npz path")
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     args = parser.parse_args()
 
-    if args.device == "auto":
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    else:
-        device = args.device
+    device = device_from_arg(args.device)
     print(f"Using device: {device}")
 
-    checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    net = checkpoint["net"]
+    style_ckpt = args.style_encoder_model or args.checkpoint
+    predictor_ckpt = args.predictor_encoder_model or args.checkpoint
+    if not style_ckpt or not predictor_ckpt:
+        parser.error("provide --checkpoint, or --style-encoder-model/--predictor-encoder-model")
 
-    style_encoder = StyleEncoder(dim_in=64, style_dim=128, max_conv_dim=512)
-    predictor_encoder = StyleEncoder(dim_in=64, style_dim=128, max_conv_dim=512)
-    style_encoder.load_state_dict(strip_prefix(net["style_encoder"]))
-    predictor_encoder.load_state_dict(strip_prefix(net["predictor_encoder"]))
+    style_encoder, _, _ = load_encoder("style_encoder", style_ckpt, device)
+    predictor_encoder, _, _ = load_encoder("predictor_encoder", predictor_ckpt, device)
 
-    predictor_encoder_trained = True
-    try:
-        predictor_encoder.load_state_dict(strip_prefix(net["predictor_encoder"]))
-        with torch.no_grad():
-            test_out = predictor_encoder(torch.randn(1, 1, 80, 200))
-            if test_out.norm().item() > 1e3:
-                predictor_encoder_trained = False
-    except Exception:
-        predictor_encoder_trained = False
+    if not encoder_is_trained(predictor_encoder):
+        print("predictor_encoder untrained or collapsed; replacing with style_encoder (timbre only)")
+        predictor_encoder, _, _ = load_encoder("style_encoder", style_ckpt, device)
 
-    if not predictor_encoder_trained:
-        print("predictor_encoder untrained (Stage 1 only); using style_encoder for both halves")
-        predictor_encoder.load_state_dict(strip_prefix(net["style_encoder"]))
-
-    style_encoder = style_encoder.to(device).eval()
-    predictor_encoder = predictor_encoder.to(device).eval()
+    style_encoder = style_encoder.eval()
+    predictor_encoder = predictor_encoder.eval()
 
     mel_transform = torchaudio.transforms.MelSpectrogram(
         sample_rate=24000, n_fft=2048, win_length=1200, hop_length=300, n_mels=80
