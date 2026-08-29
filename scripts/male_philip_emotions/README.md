@@ -73,3 +73,17 @@ cargo run --release --example german_philip_emotions
 
 This synthesizes the test sentence in all eight emotions and plays them
 sequentially.
+
+## Pauses
+
+Kokoro's pauses come from per-token durations, and this German model assigns
+little/no pause to punctuation (`...`, `-` etc. add nothing and `-` isn't even
+in the phoneme vocab). To insert controlled, guaranteed pauses use a marker
+anywhere in the text:
+
+- `<p>` — inserts `TTSKoko::DEFAULT_PAUSE_MS` (300 ms) of silence
+- `<p-150>` — inserts 150 ms of silence (any whole ms value)
+
+Example: `"Hallo.<p-250>Wie geht es dir?"` adds 250 ms of silence after
+"Hallo.". Pauses are inserted in the audio domain and work in both batch
+(`tts_raw_audio`) and streaming modes.

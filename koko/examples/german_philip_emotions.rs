@@ -5,6 +5,12 @@
 //! The directory with the source files and kokoro model is `<repo-root-dir>/_dev_data/male_philip_emotion_variation`.
 //! The source philip-wav files are in the directory `<repo-root-dir>/_dev_data/male_philip_emotion_variation/philip_source_emotion_wavs`.
 //!
+//! Explicit pauses can be inserted anywhere in the text with a marker:
+//!   - `<p>`     inserts `TTSKoko::DEFAULT_PAUSE_MS` (300 ms) of silence
+//!   - `<p-150>` inserts 150 ms of silence (any whole ms value)
+//!   e.g. "Hallo.<p-250>Wie geht es dir?" adds a 250 ms silence after "Hallo."
+//! Pauses are inserted in the audio domain and work in batch and streaming modes.
+//!
 //! Run within the repo root directory:
 //! `cargo run --release --example german_philip_emotions`
 //!

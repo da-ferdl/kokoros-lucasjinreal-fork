@@ -5,6 +5,7 @@ use crate::utils::debug::format_debug_prefix;
 use lazy_static::lazy_static;
 use ndarray::Array3;
 use ndarray_npy::NpzReader;
+use regex::Regex;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
@@ -13,6 +14,29 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use espeak_rs::text_to_phonemes;
+
+/// Default pause inserted for a bare `<p>` marker, in milliseconds.
+pub const DEFAULT_PAUSE_MS: u64 = 300;
+
+/// Splits text on `<p>` / `<p-150>` pause markers into `(segment, pause_ms_after)`.
+/// `pause_ms_after` is 0 for the trailing remainder (no pause after the final segment).
+fn parse_pause_segments(text: &str) -> Vec<(String, u64)> {
+    let re = Regex::new(r"(?i)<\s*p(?:-(\d+))?\s*>").unwrap();
+    let mut out = Vec::new();
+    let mut last = 0usize;
+    for caps in re.captures_iter(text) {
+        let m = caps.get(0).unwrap();
+        let segment = text[last..m.start()].to_string();
+        let pause_ms = caps
+            .get(1)
+            .and_then(|g| g.as_str().parse::<u64>().ok())
+            .unwrap_or(DEFAULT_PAUSE_MS);
+        out.push((segment, pause_ms));
+        last = m.end();
+    }
+    out.push((text[last..].to_string(), 0));
+    out
+}
 
 // Global mutex to serialize espeak-rs calls to prevent phoneme randomization
 // espeak-rs uses global state internally and is not thread-safe
@@ -148,14 +172,15 @@ impl TTSKoko {
         chunk_number_start: Option<usize>,
         mut mode: ExecutionMode,
     ) -> Result<Option<(Vec<f32>, Vec<WordAlignment>)>, Box<dyn std::error::Error>> {
-        let chunks = self.split_text_into_chunks(txt, 500, lan);
-      
+        let segments = parse_pause_segments(txt);
+
         let start_chunk_num = chunk_number_start.unwrap_or(0);
 
         let debug_prefix = format_debug_prefix(request_id, instance_id);
 
         let process_one_chunk = |chunk: &str,
-                                 chunk_num: usize|
+                                 chunk_num: usize,
+                                 trailing_silence: usize|
          -> Result<TtsOutput, Box<dyn std::error::Error>> {
             let chunk_info = format!("Chunk: {}, ", chunk_num);
             tracing::debug!("{} {}text: '{}'", debug_prefix, chunk_info, chunk);
@@ -286,8 +311,10 @@ impl TTSKoko {
 
                 // Per‑chunk closure: linearly scale the local alignment times to match this chunk’s audio length.
                 // This eliminates cumulative drift across chunks and prevents middle events from sliding late.
+                // Trailing silence (from a pause marker) is excluded so word timestamps map onto the speech only.
                 let t_end_sec = chunk_time_cursor_frames / frames_per_sec; // alignment‑derived duration (sec)
-                let chunk_audio_sec = chunk_audio.len() as f32 / 24_000.0; // audio duration (sec)
+                let speech_len = chunk_audio.len().saturating_sub(trailing_silence);
+                let chunk_audio_sec = speech_len as f32 / 24_000.0; // audio duration (sec)
 
                 if t_end_sec > 0.0 {
                     let s = (chunk_audio_sec / t_end_sec);
@@ -323,16 +350,40 @@ impl TTSKoko {
                     }
                 }
 
+                let mut chunk_audio = chunk_audio;
+                chunk_audio.extend(std::iter::repeat(0.0).take(trailing_silence));
                 Ok(TtsOutput::Aligned(chunk_audio, alignments))
             } else {
+                let mut chunk_audio = chunk_audio;
+                chunk_audio.extend(std::iter::repeat(0.0).take(trailing_silence));
                 Ok(TtsOutput::Audio(chunk_audio))
             }
         };
 
+        // Flatten the pause-delimited segments into a list of (chunk, trailing_silence_samples).
+        // A pause marker inserts `trailing_silence` samples of silence after that segment's last chunk.
+        let sample_rate = 24_000_f32;
+        let mut plan: Vec<(String, usize)> = Vec::new();
+        let seg_count = segments.len();
+        for (idx, (segment_text, pause_ms)) in segments.into_iter().enumerate() {
+            let chunks = self.split_text_into_chunks(&segment_text, 500, lan);
+            let is_last_segment = idx + 1 == seg_count;
+            let pause_samples = (pause_ms as f32 / 1000.0 * sample_rate) as usize;
+            let chunk_count = chunks.len();
+            for (ci, chunk) in chunks.into_iter().enumerate() {
+                let trailing = if !is_last_segment && ci + 1 == chunk_count {
+                    pause_samples
+                } else {
+                    0
+                };
+                plan.push((chunk, trailing));
+            }
+        }
+
         match &mut mode {
             ExecutionMode::Stream(callback) => {
-                for (i, chunk) in chunks.iter().enumerate() {
-                    let output = process_one_chunk(chunk, start_chunk_num + i)?;
+                for (i, (chunk, trailing)) in plan.iter().enumerate() {
+                    let output = process_one_chunk(chunk, start_chunk_num + i, *trailing)?;
                     callback(output)?;
                 }
                 Ok(None)
@@ -342,10 +393,9 @@ impl TTSKoko {
                 let mut batch_audio = Vec::new();
                 let mut batch_alignments = Vec::new();
                 let mut global_time_offset = 0.0;
-                let sample_rate = 24000.0;
 
-                for (i, chunk) in chunks.iter().enumerate() {
-                    let output = process_one_chunk(chunk, start_chunk_num + i)?;
+                for (i, (chunk, trailing)) in plan.iter().enumerate() {
+                    let output = process_one_chunk(chunk, start_chunk_num + i, *trailing)?;
 
                     match output {
                         TtsOutput::Aligned(audio, alignments) => {
