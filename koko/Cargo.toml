@@ -11,3 +11,12 @@ clap = { version = "4.5.39", features = ["derive"] }
 tokio = { version = "1.45.1", features = ["io-util", "rt-multi-thread"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+rodio = { version = "0.22.2", default-features = false, features = ["playback"] }
+anyhow = "1"
+
+
+[[example]]
+name = "german_martin"
+path = "examples/german_martin.rs"
