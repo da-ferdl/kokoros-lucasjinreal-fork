@@ -20,3 +20,7 @@ anyhow = "1"
 [[example]]
 name = "german_martin"
 path = "examples/german_martin.rs"
+
+[[example]]
+name = "german_philip_emotions"
+path = "examples/german_philip_emotions.rs"
